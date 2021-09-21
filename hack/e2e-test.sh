@@ -27,18 +27,40 @@ TEST_NETWORK_NAME=${TEST_NETWORK_NAME:-"network1"}
 TEST_INTERFACE_NAME="${TEST_INTERFACE_NAME:-"eth0"}"
 NUMBER_OF_THRASH_ITER=${NUMBER_OF_TRASH_ITER:-30}
 TIMEOUT_K8="5000s"
+TIMEOUT="5000"
 IPV4_TEST_RANGE="10.10.0.0/16"
 IPV4_RANGE_POOL_NAME="10.10.0.0-16"
 TEST_IMAGE=${TEST_IMAGE:-"quay.io/dougbtv/alpine:latest"}
 TEST_NAMESPACE="default"
 WB_NAMESPACE="kube-system"
-MAX_PODS_PER_NODE=100
+MAX_PODS_PER_NODE=30
 RS_NAME="whereabouts-scale-test"
 WB_LABEL_EQUAL="tier=whereabouts-scale-test"
 WB_LABEL_COLON="tier: whereabouts-scale-test"
 
+retry() {
+  local status=0
+  local retries=${RETRY_MAX:=5}
+  local delay=${INTERVAL:=5}
+  local to=${TIMEOUT:=20}
+  cmd="$*"
+
+  while [ $retries -gt 0 ]
+  do
+    status=0
+    timeout $to bash -c "echo $cmd && $cmd" || status=$?
+    if [ $status -eq 0 ]; then
+      break;
+    fi
+    echo "Exit code: '$status'. Sleeping '$delay' seconds before retrying"
+    sleep $delay
+    let retries--
+  done
+  return $status
+}
+
 set_pod_count() {
-cat <<EOF | kubectl apply -f-
+cat <<EOF | retry kubectl apply -f-
 apiVersion: apps/v1
 kind: ReplicaSet
 metadata:
@@ -67,7 +89,7 @@ EOF
 }
 
 create_foo_ipv4_network() {
-cat <<EOF | kubectl apply -f -
+cat <<EOF | retry kubectl apply -f -
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
 metadata:
@@ -133,7 +155,7 @@ for i in $(seq $NUMBER_OF_THRASH_ITER); do
   last_pod_count=$pod_count
   sleep 5
   echo "### waiting until pods are ready and also timing how long it takes to reach pod count of $pod_count"
-  time kubectl wait --for=condition=ready pod --selector $WB_LABEL_EQUAL --namespace $TEST_NAMESPACE --timeout $TIMEOUT_K8
+  retry time kubectl wait --for=condition=ready pod --selector $WB_LABEL_EQUAL --namespace $TEST_NAMESPACE --timeout $TIMEOUT_K8
   sleep 5
   # tests
   is_pod_ip_unique
@@ -141,8 +163,8 @@ for i in $(seq $NUMBER_OF_THRASH_ITER); do
 done
 
 echo "## deleting replicate set"
-kubectl delete rs $RS_NAME --namespace $TEST_NAMESPACE
+retry kubectl delete rs $RS_NAME --namespace $TEST_NAMESPACE
 sleep 5
-kubectl wait --for=delete pod --selector tier=$RS_NAME --namespace $TEST_NAMESPACE --timeout $TIMEOUT_K8
+retry kubectl wait --for=delete pod --selector tier=$RS_NAME --namespace $TEST_NAMESPACE --timeout $TIMEOUT_K8
 is_zero_ippool_allocations
 echo "## test complete"
